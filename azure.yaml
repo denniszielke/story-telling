@@ -1,0 +1,21 @@
+name: story-telling
+metadata:
+  template: story-telling@1.0.0
+hooks:
+  postdeploy:
+    - name: copy-env-file
+      description: Copy environment file from azd environment folder
+      shell: sh
+      run: cp .azure/$AZURE_ENV_NAME/.env ./
+    - name: deploy-agents
+      description: Build container images and deploy all agents to Foundry
+      shell: sh
+      run: |
+        echo "done"
+        # python3 -m venv .venv
+        # . .venv/bin/activate
+        # pip install --quiet --upgrade pip
+        # pip install --quiet -r src/requirements.txt
+        # cd scripts && python3 deploy_agents.py
+infra:
+  provider: bicep
