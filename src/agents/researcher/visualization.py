@@ -1,34 +1,55 @@
-"""Visualization generation tool for the researcher agent."""
+"""Visualization generation tool for the researcher agent.
 
+Uses the Microsoft AI Image generation endpoint (`MAI-Image-2e`) exposed by
+Azure AI Foundry at `/mai/v1/images/generations`. Authenticates with Entra ID
+via `DefaultAzureCredential` unless `AZURE_OPENAI_API_KEY` is set.
+"""
+
+import base64
 import os
 from pathlib import Path
 
+import httpx
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 from dotenv import load_dotenv
-from openai import AzureOpenAI
 
 load_dotenv(override=True)
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "prompts" / "visualization_generation.md"
 
 _credential = DefaultAzureCredential()
-
-
-def _get_image_client() -> AzureOpenAI:
-    """Create an Azure OpenAI client configured for image generation."""
-    token_provider = get_bearer_token_provider(
-        _credential, "https://cognitiveservices.azure.com/.default"
-    )
-    return AzureOpenAI(
-        azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        api_version=os.getenv("AZURE_OPENAI_IMAGE_API_VERSION", "2024-10-21"),
-        azure_ad_token_provider=token_provider,
-    )
+_token_provider = get_bearer_token_provider(
+    _credential, "https://cognitiveservices.azure.com/.default"
+)
 
 
 def _load_prompt_template() -> str:
     """Load the visualization generation prompt template."""
     return _PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def _mai_endpoint() -> str:
+    """Resolve the MAI-Image services endpoint.
+
+    Priority:
+      1. `AZURE_AI_SERVICES_ENDPOINT` (preferred — the `*.services.ai.azure.com` host).
+      2. Derive from `AZURE_OPENAI_ENDPOINT` by swapping `.openai.azure.com`
+         for `.services.ai.azure.com`.
+    """
+    base = os.getenv("AZURE_AI_SERVICES_ENDPOINT")
+    if not base:
+        openai_ep = os.environ["AZURE_OPENAI_ENDPOINT"].rstrip("/")
+        base = openai_ep.replace(".openai.azure.com", ".services.ai.azure.com")
+    base = base.rstrip("/")
+    return f"{base}/mai/v1/images/generations"
+
+
+def _auth_headers() -> dict[str, str]:
+    """Build auth headers (api-key takes precedence, otherwise Entra bearer)."""
+    api_key = os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("AZURE_AI_SERVICES_API_KEY")
+    if api_key:
+        return {"api-key": api_key}
+    return {"Authorization": f"Bearer {_token_provider()}"}
 
 
 def generate_visualization(
@@ -41,7 +62,7 @@ def generate_visualization(
     aspect_ratio: str = "16:9",
     output_path: str | None = None,
 ) -> str:
-    """Generate a whiteboard-style architecture visualization using the prompt template.
+    """Generate a whiteboard-style architecture visualization using MAI-Image-2e.
 
     Args:
         title: Title shown at the top of the diagram.
@@ -61,10 +82,6 @@ def generate_visualization(
 
     # Build the filled prompt
     number_of_layers = len(layers)
-    layer_block = "\n".join(layers)
-    component_block = "\n".join(components)
-    flow_block = "\n".join(flows)
-    callout_block = "\n".join(callouts) if callouts else "Key architectural benefit\nBusiness value delivered"
 
     prompt = template
     prompt = prompt.replace("{TITLE}", title)
@@ -103,35 +120,36 @@ def generate_visualization(
         prompt = prompt.replace(f"{{CALLOUT_{i}}}", "")
     prompt = prompt.replace("{OPTIONAL_CALLOUT_4}", "")
 
-    # Determine image size from aspect ratio
+    # Determine width/height from aspect ratio (MAI-Image-2e takes explicit dims)
     size_map = {
-        "16:9": "1792x1024",
-        "4:3": "1024x1024",
-        "1:1": "1024x1024",
+        "16:9": (1792, 1024),
+        "4:3": (1280, 1024),
+        "1:1": (1024, 1024),
     }
-    size = size_map.get(aspect_ratio, "1792x1024")
+    width, height = size_map.get(aspect_ratio, (1792, 1024))
 
-    # Generate the image
-    client = _get_image_client()
-    deployment = os.getenv("AZURE_OPENAI_IMAGE_DEPLOYMENT_NAME", "dall-e-3")
+    # Call MAI-Image-2e
+    payload = {
+        "prompt": prompt,
+        "width": width,
+        "height": height,
+        "model": os.getenv("MAI_IMAGE_MODEL", "MAI-Image-2e"),
+    }
+    headers = {"Content-Type": "application/json", **_auth_headers()}
 
-    response = client.images.generate(
-        model=deployment,
-        prompt=prompt,
-        size=size,
-        quality="hd",
-        n=1,
-    )
+    with httpx.Client(timeout=120.0) as http:
+        response = http.post(_mai_endpoint(), json=payload, headers=headers)
+        response.raise_for_status()
+        result = response.json()
 
-    image_url = response.data[0].url
-
-    # Download and save
-    import urllib.request
+    b64 = result["data"][0]["b64_json"]
+    image_bytes = base64.b64decode(b64)
 
     if not output_path:
         safe_title = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in title)
         output_path = f"{safe_title}.png"
 
-    urllib.request.urlretrieve(image_url, output_path)
+    Path(output_path).write_bytes(image_bytes)
 
     return f"Visualization saved to: {output_path}"
+

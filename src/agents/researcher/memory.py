@@ -3,7 +3,54 @@
 import os
 
 from dotenv import load_dotenv
-from mem0 import Memory
+
+# --- Workaround for mem0 + newer azure-core ---------------------------------
+# mem0's AzureAISearch.__init__ unconditionally calls
+#   self.search_client._client._config.user_agent_policy.add_user_agent("mem0")
+# but in current azure-core builds `user_agent_policy` is None on the
+# SearchClient pipeline config, raising AttributeError. Patch the offending
+# init to ensure a UserAgentPolicy exists first.
+from azure.core.pipeline.policies import UserAgentPolicy  # noqa: E402
+from mem0.vector_stores import azure_ai_search as _mem0_ais  # noqa: E402
+
+_original_ais_init = _mem0_ais.AzureAISearch.__init__
+
+
+def _patched_ais_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    # Temporarily replace the buggy add_user_agent call by ensuring the
+    # underlying clients have a user_agent_policy before mem0 touches it.
+    from azure.search.documents import SearchClient as _SC
+    from azure.search.documents.indexes import SearchIndexClient as _SIC
+
+    _orig_sc_init = _SC.__init__
+    _orig_sic_init = _SIC.__init__
+
+    def _ensure_uap(client):
+        cfg = client._client._config
+        if getattr(cfg, "user_agent_policy", None) is None:
+            cfg.user_agent_policy = UserAgentPolicy()
+
+    def _sc_init(s, *a, **kw):
+        _orig_sc_init(s, *a, **kw)
+        _ensure_uap(s)
+
+    def _sic_init(s, *a, **kw):
+        _orig_sic_init(s, *a, **kw)
+        _ensure_uap(s)
+
+    _SC.__init__ = _sc_init
+    _SIC.__init__ = _sic_init
+    try:
+        _original_ais_init(self, *args, **kwargs)
+    finally:
+        _SC.__init__ = _orig_sc_init
+        _SIC.__init__ = _orig_sic_init
+
+
+_mem0_ais.AzureAISearch.__init__ = _patched_ais_init
+# ----------------------------------------------------------------------------
+
+from mem0 import Memory  # noqa: E402
 
 load_dotenv(override=True)
 
@@ -39,6 +86,9 @@ _config = {
         "provider": "azure_ai_search",
         "config": {
             "service_name": os.environ["AZURE_AI_SEARCH_SERVICE_NAME"],
+            # api_key="" triggers DefaultAzureCredential in mem0's AzureAISearch
+            # while satisfying its pydantic config (which requires a str).
+            "api_key": "",
             "collection_name": os.getenv("MEM0_COLLECTION_NAME", "researcher-memory"),
             "embedding_model_dims": int(os.getenv("AZURE_OPENAI_EMBEDDING_DIMENSIONS", "1536")),
             "hybrid_search": True,
@@ -86,7 +136,7 @@ def save_insight(
 
     result = _get_memory().add(
         insight,
-        agent_id=_AGENT_ID,
+        filters={"agent_id": _AGENT_ID},
         metadata=metadata,
     )
     memory_id = result.get("id", "unknown") if isinstance(result, dict) else "stored"
@@ -114,7 +164,7 @@ def recall_insights(
     """
     results = _get_memory().search(
         query,
-        agent_id=_AGENT_ID,
+        filters={"agent_id": _AGENT_ID},
         limit=limit,
     )
 
