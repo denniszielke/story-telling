@@ -4,6 +4,8 @@ Your task is to analyse a guide, article, or documentation describing a concept,
 
 Extract and synthesise all relevant information into a structured, reusable format that can be applied in enterprise scenarios.
 
+Make sure to focus on the truly insightfull pieces of information and ignore the obvious and generic statements that lack specific context and relevance.
+
 ## Strict instructions
 
 - Do NOT include any personal names or individual references.

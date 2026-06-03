@@ -116,8 +116,8 @@ class SearchIndexMaintainer:
         path = urlparse(url).path.lower()
         return any(path.endswith(ext) for ext in IMAGE_EXTENSIONS)
 
-    def _enrich_artifacts(self, artifacts: List[str]) -> List[dict]:
-        """Convert artifact URLs to complex objects, describing images via vision model."""
+    def _enrich_artifacts(self, artifacts: List[str], description: str = "", objective: str = "", classification: str = "") -> List[dict]:
+        """Convert artifact URLs to complex objects, describing images via vision model with document context."""
         enriched = []
         for url in artifacts:
             url = url.strip()
@@ -127,8 +127,14 @@ class SearchIndexMaintainer:
             artifact = {"reference": url, "type": "image" if self._is_image_url(url) else "link", "description": ""}
 
             if artifact["type"] == "image":
+                context_prompt = (
+                    f"This image is part of a document with the following context:\n"
+                    f"- Objective: {objective}\n"
+                    f"- Classification: {classification}\n"
+                    f"- Description: {description}\n\n"
+                )
                 try:
-                    artifact["description"] = self._image_extractor.describe_image(url)
+                    artifact["description"] = self._image_extractor.describe_image(url, prompt=context_prompt)
                     logger.info(f"Described image artifact: {url}")
                 except Exception as e:
                     logger.warning(f"Failed to describe image artifact '{url}': {e}")
@@ -252,7 +258,12 @@ class SearchIndexMaintainer:
                 "complexity": item.get("complexity", ""),
                 "tags": item.get("tags", []),
                 "rating": item.get("rating"),
-                "artifacts": self._enrich_artifacts(item.get("artifacts", [])),
+                "artifacts": self._enrich_artifacts(
+                    item.get("artifacts", []),
+                    description=item.get("description", ""),
+                    objective=item.get("objective", ""),
+                    classification=item.get("classification", ""),
+                ),
             }
             docs.append(doc)
 
