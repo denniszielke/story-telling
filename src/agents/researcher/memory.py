@@ -46,7 +46,16 @@ _config = {
     },
 }
 
-_memory = Memory.from_config(_config)
+_memory: Memory | None = None
+
+
+def _get_memory() -> Memory:
+    """Instantiate the mem0 client lazily so module import never fails."""
+    global _memory
+    if _memory is None:
+        _memory = Memory.from_config(_config)
+    return _memory
+
 
 # Agent ID used to scope memories to this researcher agent.
 _AGENT_ID = "researcher"
@@ -75,7 +84,7 @@ def save_insight(
     if tags:
         metadata["tags"] = ",".join(tags)
 
-    result = _memory.add(
+    result = _get_memory().add(
         insight,
         agent_id=_AGENT_ID,
         metadata=metadata,
@@ -103,7 +112,7 @@ def recall_insights(
         A formatted list of matching insights from memory, or a message
         if no insights are found.
     """
-    results = _memory.search(
+    results = _get_memory().search(
         query,
         agent_id=_AGENT_ID,
         limit=limit,

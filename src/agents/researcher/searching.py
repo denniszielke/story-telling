@@ -19,14 +19,6 @@ _search_client = SearchClient(
     credential=_credential,
 )
 
-_openai_client = AzureOpenAI(
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    azure_deployment=os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME", "text-embedding-3-small"),
-    api_version=os.getenv("AZURE_OPENAI_EMBEDDING_API_VERSION", "2024-10-21"),
-    azure_ad_token_provider=None,  # set below
-)
-
-
 def _get_embedding(text: str) -> list[float]:
     """Generate an embedding vector for a query string."""
     from azure.identity import get_bearer_token_provider

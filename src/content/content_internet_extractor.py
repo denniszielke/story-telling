@@ -28,6 +28,29 @@ EXTRACTION_PROMPTS = {
 }
 
 
+def _match_extraction_prompt(classification: str = "", objective: str = "") -> Optional[str]:
+    """Find the best matching extraction prompt for a document.
+
+    Checks the objective field first ("use case" -> case-study prompt,
+    "method" -> concept prompt), then falls back to classification matching.
+    """
+    # Match by objective
+    objective_lower = (objective or "").lower()
+    if objective_lower == "use case":
+        return EXTRACTION_PROMPTS["case-study"]
+    if objective_lower == "method":
+        return EXTRACTION_PROMPTS["concept"]
+
+    # Fallback: match by classification
+    if not classification:
+        return None
+    classification_lower = classification.lower()
+    for key, prompt in EXTRACTION_PROMPTS.items():
+        if classification_lower.startswith(key) or key in classification_lower:
+            return prompt
+    return None
+
+
 class ContentExtractor:
     """Extracts and enriches content from various sources using LLM and web retrieval.
 
@@ -105,9 +128,9 @@ class ContentExtractor:
             logger.error(f"Request error fetching {url}: {e}")
             raise
 
-    def extract_content(self, classification: str, raw_content: str, description: str = "") -> str:
+    def extract_content(self, classification: str, raw_content: str, description: str = "", objective: str = "") -> str:
         """Extract structured content from raw text using the appropriate prompt for the classification type."""
-        prompt = EXTRACTION_PROMPTS.get(classification)
+        prompt = _match_extraction_prompt(classification, objective)
         if not prompt:
             logger.warning(f"No extraction prompt for classification '{classification}', returning raw content")
             return raw_content
@@ -172,13 +195,14 @@ class ContentExtractor:
         reference = document.get("reference", "")
         description = document.get("description", "")
         content = document.get("content", "")
+        objective = document.get("objective", "")
 
         # Fetch and extract content if reference URL is present and content is empty
-        if reference and not content and classification in EXTRACTION_PROMPTS:
+        if reference and not content and _match_extraction_prompt(classification, objective):
             logger.info(f"Enriching document '{document.get('id')}' from reference: {reference}")
             try:
                 raw_content = self.fetch_web_content(reference)
-                content = self.extract_content(classification, raw_content, description)
+                content = self.extract_content(classification, raw_content, description, objective)
                 print(f"Extracted content for document '{document.get('id')}': {content[:100]}...")
                 document["content"] = content
             except Exception as e:
@@ -186,7 +210,7 @@ class ContentExtractor:
                 content = description
 
         # Generate tags if content was extracted
-        if content and classification in EXTRACTION_PROMPTS:
+        if content and _match_extraction_prompt(classification, objective):
             existing_tags = document.get("tags", [])
             document["tags"] = self.generate_tags(content, description, existing_tags)
 
