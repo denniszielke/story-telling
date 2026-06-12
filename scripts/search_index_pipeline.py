@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 
 from src.content.content_internet_extractor import ContentExtractor
 from src.content.content_image_extractor import ContentImageExtractor
+from src.content.content_repository_extractor import RepositoryContentExtractor
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"}
 
@@ -71,8 +72,55 @@ class SearchIndexMaintainer:
             openai_endpoint=openai_endpoint,
             api_version=api_version,
         )
+        self._repository_extractor = RepositoryContentExtractor(
+            openai_endpoint=openai_endpoint,
+            chat_model=chat_model,
+            api_version=api_version,
+        )
         
         logger.info(f"Initialized SearchIndexMaintainer: index='{self.index_name}', endpoint='{self.search_endpoint}'")
+
+    def _requires_scenario(self, doc: dict) -> bool:
+        """Return whether a document must carry a scenario field."""
+        objective = (doc.get("objective") or "").strip().lower()
+        return objective in {"use case", "method"}
+
+    def _build_fallback_scenario(self, doc: dict) -> str:
+        """Construct a minimal scenario summary when extraction did not provide one."""
+        parts = []
+
+        description = (doc.get("description") or "").strip()
+        if description:
+            parts.append(description)
+
+        context = (doc.get("context") or "").strip()
+        if context:
+            parts.append(f"Context: {context}.")
+
+        classification = (doc.get("classification") or "").strip()
+        if classification:
+            parts.append(f"Classification: {classification}.")
+
+        return " ".join(parts).strip()
+
+    def _ensure_required_scenario(self, doc: dict) -> dict:
+        """Guarantee required entries have a non-empty scenario before indexing."""
+        scenario = (doc.get("scenario") or "").strip()
+        if not self._requires_scenario(doc):
+            if scenario:
+                doc["scenario"] = scenario
+            return doc
+
+        if not scenario:
+            scenario = self._build_fallback_scenario(doc)
+
+        if not scenario:
+            raise ValueError(
+                f"Document '{doc.get('id')}' requires a scenario but none could be derived"
+            )
+
+        doc["scenario"] = scenario
+        return doc
     
     def _get_credential(self):
         """Get Azure AI Search credential (API key or Entra ID)."""
@@ -185,13 +233,9 @@ class SearchIndexMaintainer:
         logger.info(f"Ensuring index '{self.index_name}' exists...")
         index_client = self._get_index_client()
         
-        # Check if index already exists
         logger.debug("Checking for existing indexes...")
-        existing_indexes = [idx.name for idx in index_client.list_indexes()]
-        if self.index_name in existing_indexes:
-            logger.info(f"Index '{self.index_name}' already exists.")
-            print(f"Index '{self.index_name}' already exists.")
-            return
+        existing_indexes = {idx.name for idx in index_client.list_indexes()}
+        index_exists = self.index_name in existing_indexes
 
         fields = [
             SearchField(name="id", type=SearchFieldDataType.String, key=True),
@@ -199,6 +243,7 @@ class SearchIndexMaintainer:
             SearchField(name="description", type=SearchFieldDataType.String, searchable=True),
             SearchField(name="created", type=SearchFieldDataType.DateTimeOffset, filterable=True, sortable=True),
             SearchField(name="updated", type=SearchFieldDataType.DateTimeOffset, filterable=True, sortable=True),
+            SearchField(name="scenario", type=SearchFieldDataType.String, searchable=True),
             SearchField(name="context", type=SearchFieldDataType.String, searchable=True),
             SearchField(name="content", type=SearchFieldDataType.String, searchable=True),
             SearchField(name="source", type=SearchFieldDataType.String, searchable=True, filterable=True, facetable=True),
@@ -212,6 +257,12 @@ class SearchIndexMaintainer:
                 SearchField(name="type", type=SearchFieldDataType.String, searchable=True, filterable=True),
                 SearchField(name="reference", type=SearchFieldDataType.String, searchable=True),
             ]),
+            SearchField(
+                name="scenario_vector",
+                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                vector_search_dimensions=self.embedding_dimensions,
+                vector_search_profile_name="hnsw"
+            ),
             SearchField(
                 name="content_vector",
                 type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
@@ -228,8 +279,9 @@ class SearchIndexMaintainer:
         logger.debug(f"Creating new index '{self.index_name}' with {len(fields)} fields and vector search configuration")
         index = SearchIndex(name=self.index_name, fields=fields, vector_search=vector_search)
         result = index_client.create_or_update_index(index)
-        logger.info(f"Index '{result.name}' created successfully.")
-        print(f"Index '{result.name}' created.")
+        action = "updated" if index_exists else "created"
+        logger.info(f"Index '{result.name}' {action} successfully.")
+        print(f"Index '{result.name}' {action}.")
     
     def load_samples_from_json(self, payload: List[dict]) -> List[dict]:
         """Load documents from JSON payload and enrich them with content extraction and embeddings."""
@@ -244,6 +296,7 @@ class SearchIndexMaintainer:
                 "description": item.get("description", ""),
                 "created": item.get("created"),
                 "updated": item.get("updated"),
+                "scenario": item.get("scenario", ""),
                 "context": item.get("context", ""),
                 "content": item.get("content", ""),
                 "source": item.get("source", ""),
@@ -256,11 +309,20 @@ class SearchIndexMaintainer:
             }
             docs.append(doc)
 
-        # Enrich all documents via the content extractor
+        # Enrich repository-style entries from GitHub metadata + default README.
+        docs = self._repository_extractor.enrich_documents(docs)
+
+        # Enrich all documents via the internet content extractor.
         docs = self._content_extractor.enrich_documents(docs)
+        docs = [self._ensure_required_scenario(doc) for doc in docs]
 
         # Generate embeddings (search-indexing concern)
         for doc in docs:
+            scenario_text = (doc.get("scenario") or "").strip()
+            if scenario_text:
+                doc["scenario"] = scenario_text
+                doc["scenario_vector"] = self._generate_embedding(scenario_text)
+
             embedding_text = doc.get("content") or doc.get("description", "")
             if embedding_text:
                 doc["content_vector"] = self._generate_embedding(embedding_text)
@@ -316,6 +378,7 @@ class SearchIndexMaintainer:
             raise
         
         for doc in docs:
+            doc.pop("scenario_vector", None)
             doc.pop("content_vector", None)  # Remove vector for response
 
         return {

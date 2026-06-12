@@ -4,7 +4,13 @@ Your task is to analyse a guide, article, or documentation describing a concept,
 
 Extract and synthesise all relevant information into a structured, reusable format that can be applied in enterprise scenarios.
 
-Make sure to focus on the truly insightfull pieces of information and ignore the obvious and generic statements that lack specific context and relevance.
+Make sure to focus on the truly insightful pieces of information and ignore the obvious and generic statements that lack specific context and relevance.
+
+The output is used to populate two independent index fields:
+- `scenario`: the enterprise situation, problem space, and adoption trigger
+- `content`: the methodology, solution approach, implementation details, trade-offs, and outcomes
+
+Keep those concerns clearly separated.
 
 ## Strict instructions
 
@@ -31,19 +37,26 @@ Make sure to focus on the truly insightfull pieces of information and ignore the
 
 (HERE WRITE A SHORT ONE SENTENCE SUMMARY ON THIS CONCEPT)
 
-### 1. Scenario description and problem space
-Explain:
-- The real-world scenario and context
-- The core problem(s) or limitations
+## Scenario
+Write 1 compact paragraph that only captures the scenario:
+- Enterprise context or operating environment
+- Problem space or trigger condition
 - Why existing approaches are insufficient
-- Environmental constraints (scale, complexity, enterprise context, etc.)
+- Constraints that make the methodology relevant
 
----
+Do not describe the solution mechanics in this section.
 
-### 2. Approach and when this concept is relevant
+### 1. Solution approach and relevance
 Explain:
 - The core idea / methodology / pattern
 - The guiding principles
+- Why this approach is relevant for the scenario
+- Decision criteria for adoption
+
+---
+
+### 2. When this concept is relevant
+Explain:
 - The workflow or lifecycle (if applicable)
 - When this approach is appropriate (prerequisites and conditions for success)
 - When it is NOT suitable
@@ -97,3 +110,4 @@ Extract:
 - Ensure clear linkage between:
   - problem → approach → implementation → outcome
 - Focus on how technology actually enables the methodology.
+- After `## Scenario`, keep the remaining sections centered on the methodology, architecture, execution model, and adoption trade-offs.

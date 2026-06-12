@@ -1,0 +1,21 @@
+{
+  "name": "Research Architecture Project",
+  "mcp": {
+    "research-mcp": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8000/mcp",
+      "enabled": true,
+      "headers": {}
+    }
+  },
+  "skills": [
+    {
+      "name": "architecture-research",
+      "description": "Research comparable case studies and recommend methodologies",
+      "requiredTools": [
+        "research-mcp.search_comparable_case_studies",
+        "research-mcp.recommend_methodology"
+      ]
+    }
+  ]
+}

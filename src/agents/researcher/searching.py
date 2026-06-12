@@ -59,11 +59,12 @@ def search_architecture_content(
         A formatted string with the top matching documents including their
         description, classification, context, content, source and rating.
     """
+    vector_field = "scenario_vector" if classification == "case-study" else "content_vector"
     vector = _get_embedding(query)
     vector_query = VectorizedQuery(
         vector=vector,
         k_nearest_neighbors=top,
-        fields="content_vector",
+        fields=vector_field,
     )
 
     filter_expr = None
@@ -75,7 +76,7 @@ def search_architecture_content(
         vector_queries=[vector_query],
         filter=filter_expr,
         top=top,
-        select=["id", "objective", "description", "classification", "context", "content", "source", "reference", "tags", "rating"],
+        select=["id", "objective", "description", "classification", "scenario", "context", "content", "source", "reference", "tags", "rating"],
     )
 
     formatted = []
@@ -85,6 +86,7 @@ def search_architecture_content(
             f"**{doc['description']}**\n"
             f"- Classification: {doc.get('classification', 'n/a')}\n"
             f"- Objective: {doc.get('objective', 'n/a')}\n"
+            f"- Scenario: {doc.get('scenario', 'n/a')[:400]}\n"
             f"- Context: {doc.get('context', 'n/a')}\n"
             f"- Source: {doc.get('source', 'n/a')}\n"
             f"- Reference: {doc.get('reference', 'n/a')}\n"

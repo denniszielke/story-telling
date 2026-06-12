@@ -1,0 +1,38 @@
+[build-system]
+requires = ["pip", "wheel"]
+build-backend = "pip._internal.build"
+
+[project]
+name = "story-telling"
+version = "0.1.0"
+description = "Architecture research and storytelling project with MCP server"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "python-dotenv==1.2.2",
+    "openai==2.40.0",
+    "azure-identity==1.25.3",
+    "azure-search-documents==12.0.0",
+    "azure-containerapps-sandbox==0.1.0b1",
+    "azure-mgmt-resource>=23.0.0",
+    "azure-mgmt-authorization>=4.0.0",
+    "httpx>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "pymupdf>=1.24.0",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp>=0.1.0",
+]
+
+[project.scripts]
+research-mcp = "src.mcp_server.research_mcp_server.server:run"
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+select = ["E", "F", "W", "I"]
+line-length = 100

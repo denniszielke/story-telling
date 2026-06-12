@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from typing import List, Optional
 
 import httpx
@@ -27,6 +28,12 @@ EXTRACTION_PROMPTS = {
     "concept": load_prompt("methodology_pattern_analysis.md")
 }
 
+SCENARIO_SECTION_TITLES = {
+    "scenario",
+    "scenario description and customer context",
+    "scenario description and problem space",
+}
+
 
 def _match_extraction_prompt(classification: str = "", objective: str = "") -> Optional[str]:
     """Find the best matching extraction prompt for a document.
@@ -49,6 +56,50 @@ def _match_extraction_prompt(classification: str = "", objective: str = "") -> O
         if classification_lower.startswith(key) or key in classification_lower:
             return prompt
     return None
+
+
+def _extract_markdown_section(markdown: str, section_titles: set[str]) -> str:
+    """Return the body of the first matching markdown heading section."""
+    heading_pattern = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
+    matches = list(heading_pattern.finditer(markdown or ""))
+
+    for index, match in enumerate(matches):
+        title = match.group(1).strip().lower()
+        if title not in section_titles:
+            continue
+
+        start = match.end()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        return markdown[start:end].strip("\n -")
+
+    return ""
+
+
+def _remove_markdown_section(markdown: str, section_titles: set[str]) -> str:
+    """Remove the first matching markdown heading section from the document."""
+    heading_pattern = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.MULTILINE)
+    matches = list(heading_pattern.finditer(markdown or ""))
+
+    for index, match in enumerate(matches):
+        title = match.group(1).strip().lower()
+        if title not in section_titles:
+            continue
+
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        before = markdown[:start].rstrip()
+        after = markdown[end:].lstrip()
+        return f"{before}\n\n{after}".strip()
+
+    return markdown.strip()
+
+
+def _trim_markdown_preamble(markdown: str) -> str:
+    """Drop free text before the first markdown heading."""
+    heading_match = re.search(r"^#{1,6}\s+.+$", markdown or "", re.MULTILINE)
+    if not heading_match:
+        return markdown.strip()
+    return markdown[heading_match.start():].strip()
 
 
 class ContentExtractor:
@@ -150,6 +201,18 @@ class ContentExtractor:
         logger.debug(f"Extracted {len(extracted)} characters for classification '{classification}'")
         return extracted
 
+    def extract_scenario_and_content(self, content: str, description: str = "") -> tuple[str, str]:
+        """Split extracted markdown into a scenario summary and solution-focused content."""
+        scenario = _extract_markdown_section(content, SCENARIO_SECTION_TITLES)
+        remaining_content = _trim_markdown_preamble(
+            _remove_markdown_section(content, SCENARIO_SECTION_TITLES)
+        )
+
+        if not scenario:
+            scenario = description.strip()
+
+        return scenario.strip(), remaining_content.strip()
+
     def generate_tags(self, content: str, description: str, existing_tags: Optional[List[str]] = None) -> List[str]:
         """Generate descriptive tags from content and description using LLM."""
         chat_client = self._get_chat_client()
@@ -195,6 +258,7 @@ class ContentExtractor:
         reference = document.get("reference", "")
         description = document.get("description", "")
         content = document.get("content", "")
+        scenario = document.get("scenario", "")
         objective = document.get("objective", "")
 
         # Fetch and extract content if reference URL is present and content is empty
@@ -209,10 +273,18 @@ class ContentExtractor:
                 logger.error(f"Failed to enrich document '{document.get('id')}': {e}")
                 content = description
 
+        if content and _match_extraction_prompt(classification, objective):
+            scenario, content = self.extract_scenario_and_content(content, description)
+            document["scenario"] = scenario or document.get("scenario", "")
+            document["content"] = content
+        elif scenario:
+            document["scenario"] = scenario
+
         # Generate tags if content was extracted
         if content and _match_extraction_prompt(classification, objective):
             existing_tags = document.get("tags", [])
-            document["tags"] = self.generate_tags(content, description, existing_tags)
+            tagging_content = f"Scenario:\n{document.get('scenario', '')}\n\nContent:\n{content}".strip()
+            document["tags"] = self.generate_tags(tagging_content, description, existing_tags)
 
         return document
 
