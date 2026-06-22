@@ -41,6 +41,66 @@ def _get_embedding(text: str) -> list[float]:
     return response.data[0].embedding
 
 
+def search_architecture_documents(
+    query: str,
+    classification: Optional[str] = None,
+    objective: Optional[str] = None,
+    top: int = 5,
+    filter_expr: Optional[str] = None,
+) -> list[dict]:
+    """Search the AI Search index and return matching documents as dicts.
+
+    Args:
+        query: Natural language query.
+        classification: Optional filter on `classification` field.
+        objective: Optional filter on `objective` field.
+        top: Maximum number of results.
+        filter_expr: Optional raw OData filter expression.
+            When provided with other filters, all clauses are AND-combined.
+    """
+    normalized_objective = (objective or "").strip().lower()
+    vector_field = "scenario_vector" if normalized_objective == "use case" else "content_vector"
+    vector = _get_embedding(query)
+    vector_query = VectorizedQuery(
+        vector=vector,
+        k_nearest_neighbors=top,
+        fields=vector_field,
+    )
+
+    clauses = []
+    if classification:
+        escaped = classification.replace("'", "''")
+        clauses.append(f"classification eq '{escaped}'")
+    if objective:
+        escaped = objective.replace("'", "''")
+        clauses.append(f"objective eq '{escaped}'")
+    if filter_expr:
+        clauses.append(f"({filter_expr})")
+    effective_filter = " and ".join(clauses) if clauses else None
+
+    results = _search_client.search(
+        search_text=query,
+        vector_queries=[vector_query],
+        filter=effective_filter,
+        top=top,
+        select=[
+            "id",
+            "objective",
+            "description",
+            "classification",
+            "scenario",
+            "context",
+            "content",
+            "source",
+            "reference",
+            "tags",
+            "rating",
+        ],
+    )
+
+    return [dict(doc) for doc in results]
+
+
 def search_architecture_content(
     query: str,
     classification: Optional[str] = None,
@@ -59,24 +119,10 @@ def search_architecture_content(
         A formatted string with the top matching documents including their
         description, classification, context, content, source and rating.
     """
-    vector_field = "scenario_vector" if classification == "case-study" else "content_vector"
-    vector = _get_embedding(query)
-    vector_query = VectorizedQuery(
-        vector=vector,
-        k_nearest_neighbors=top,
-        fields=vector_field,
-    )
-
-    filter_expr = None
-    if classification:
-        filter_expr = f"classification eq '{classification}'"
-
-    results = _search_client.search(
-        search_text=query,
-        vector_queries=[vector_query],
-        filter=filter_expr,
+    results = search_architecture_documents(
+        query=query,
+        classification=classification,
         top=top,
-        select=["id", "objective", "description", "classification", "scenario", "context", "content", "source", "reference", "tags", "rating"],
     )
 
     formatted = []
