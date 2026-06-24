@@ -104,5 +104,6 @@ module storageConnection '../ai/connection.bicep' = if (!empty(aiServicesAccount
 
 output storageAccountName string = storageAccount.name
 output storageAccountId string = storageAccount.id
+output storageAccountBlobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 output storageAccountPrincipalId string = storageAccount.identity.principalId
 output storageConnectionName string = storageConnection.outputs.connectionName

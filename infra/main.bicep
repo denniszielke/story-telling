@@ -141,6 +141,7 @@ output BING_CUSTOM_GROUNDING_CONFIG_INSTANCE_NAME string = aiProject.outputs.dep
 // Azure AI Search (for product-guide vector search)
 output AZURE_AI_SEARCH_CONNECTION_NAME string = aiProject.outputs.dependentResources.search.connectionName
 output AZURE_AI_SEARCH_SERVICE_NAME string = aiProject.outputs.dependentResources.search.serviceName
+output AZURE_STORAGE_BLOB_ENDPOINT string = aiProject.outputs.dependentResources.storage.blobEndpoint
 
 output AZURE_AI_MODEL_DEPLOYMENT_NAME string = 'gpt-4.1-mini'
 output AZURE_OPENAI_CHAT_DEPLOYMENT_NAME string = 'gpt-4.1-mini'

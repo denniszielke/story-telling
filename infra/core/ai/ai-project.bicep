@@ -296,6 +296,7 @@ output dependentResources object = {
   storage: {
     accountName: hasStorageConnection ? storage!.outputs.storageAccountName : ''
     connectionName: hasStorageConnection ? storage!.outputs.storageConnectionName : ''
+    blobEndpoint: hasStorageConnection ? storage!.outputs.storageAccountBlobEndpoint : ''
   }
 }
 
