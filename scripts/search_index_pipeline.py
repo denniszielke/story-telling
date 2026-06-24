@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from src.content.content_internet_extractor import ContentExtractor
 from src.content.content_image_extractor import ContentImageExtractor
 from src.content.content_repository_extractor import RepositoryContentExtractor
+from src.content.remote_content_repository_extractor import RemoteRepositoryContentExtractor
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"}
 
@@ -48,6 +49,7 @@ class SearchIndexMaintainer:
         chat_model: Optional[str] = None,
         api_version: Optional[str] = None,
         query_samples_path: Optional[str] = None,
+        repository_extractor_mode: Optional[str] = None,
     ):
         """Initialize the SearchIndexMaintainer with configuration from environment or parameters."""
         self.index_name = index_name or os.getenv("AZURE_AI_SEARCH_INDEX_NAME", "kusto-queries-index")
@@ -72,13 +74,34 @@ class SearchIndexMaintainer:
             openai_endpoint=openai_endpoint,
             api_version=api_version,
         )
-        self._repository_extractor = RepositoryContentExtractor(
-            openai_endpoint=openai_endpoint,
-            chat_model=chat_model,
-            api_version=api_version,
+
+        self.repository_extractor_mode = (
+            repository_extractor_mode
+            or os.getenv("REPOSITORY_EXTRACTOR_MODE", "local")
+        ).strip().lower()
+        if self.repository_extractor_mode == "remote":
+            self._repository_extractor = RemoteRepositoryContentExtractor(
+                openai_endpoint=openai_endpoint,
+                chat_model=chat_model,
+                api_version=api_version,
+            )
+        elif self.repository_extractor_mode == "local":
+            self._repository_extractor = RepositoryContentExtractor(
+                openai_endpoint=openai_endpoint,
+                chat_model=chat_model,
+                api_version=api_version,
+            )
+        else:
+            raise ValueError(
+                f"Unknown repository_extractor_mode '{self.repository_extractor_mode}'. "
+                "Use 'local' or 'remote'."
+            )
+
+        logger.info(
+            f"Initialized SearchIndexMaintainer: index='{self.index_name}', "
+            f"endpoint='{self.search_endpoint}', "
+            f"repository_extractor_mode='{self.repository_extractor_mode}'"
         )
-        
-        logger.info(f"Initialized SearchIndexMaintainer: index='{self.index_name}', endpoint='{self.search_endpoint}'")
 
     def _requires_scenario(self, doc: dict) -> bool:
         """Return whether a document must carry a scenario field."""
@@ -332,6 +355,11 @@ class SearchIndexMaintainer:
 
     def load_samples_from_file(self, path: Optional[str] = None) -> List[dict]:
         """Load query samples from JSON file and generate embeddings."""
+        if path and not os.path.isabs(path) and not os.path.exists(path):
+            data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+            candidate = os.path.join(data_dir, os.path.basename(path))
+            if os.path.exists(candidate):
+                path = candidate
         file_path = path or self.query_samples_path
         logger.info(f"Loading samples from file: {file_path}")
         
@@ -416,11 +444,33 @@ class SearchIndexMaintainer:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Search index pipeline")
+    parser.add_argument(
+        "--samples_path",
+        default=None,
+        help="Path to the JSON samples file (default: data/query-samples.json)",
+    )
+    parser.add_argument(
+        "--repository_extractor_mode",
+        default=None,
+        choices=["local", "remote"],
+        help=(
+            "Repository extractor to use: 'local' (GitHub API + LLM in-process) "
+            "or 'remote' (ACA sandbox + Copilot CLI). "
+            "Defaults to REPOSITORY_EXTRACTOR_MODE env var or 'local'."
+        ),
+    )
+    args = parser.parse_args()
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     logger.info("Starting search index pipeline...")
-    maintainer = SearchIndexMaintainer()
-    maintainer.upload_samples()
+    maintainer = SearchIndexMaintainer(
+        repository_extractor_mode=args.repository_extractor_mode,
+    )
+    maintainer.upload_samples(args.samples_path)
     logger.info("Search index pipeline completed.")
