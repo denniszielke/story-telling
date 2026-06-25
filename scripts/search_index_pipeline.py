@@ -77,7 +77,7 @@ class SearchIndexMaintainer:
 
         self.repository_extractor_mode = (
             repository_extractor_mode
-            or os.getenv("REPOSITORY_EXTRACTOR_MODE", "local")
+            or os.getenv("REPOSITORY_EXTRACTOR_MODE", "remote")
         ).strip().lower()
         if self.repository_extractor_mode == "remote":
             self._repository_extractor = RemoteRepositoryContentExtractor(

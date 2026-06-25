@@ -7,7 +7,7 @@ from azure.ai.projects.models import (
     PromptAgentDefinition,
     PromptAgentDefinitionTextOptions,
     TextResponseFormatJsonSchema,
-    AgentEndpoint,
+    AgentEndpointConfig,
     AgentEndpointProtocol,
     AgentCard,
     AgentCardSkill,
@@ -77,7 +77,7 @@ def deploy() -> None:
     model = get_env("AZURE_AI_MODEL_DEPLOYMENT_NAME", default="gpt-4.1-mini")
 
     concierge = client.agents.create_version(
-        agent_name="bike-concierge",
+        agent_name="researcher-concierge",
         description="CyclePro Bike Support Concierge — classifies intent and routes to specialist agents",
         metadata={"voiceLiveCompatible": "true"},
         definition=PromptAgentDefinition(
@@ -94,7 +94,7 @@ def deploy() -> None:
         ),
     )
 
-    endpoint_config = AgentEndpoint(
+    endpoint_config = AgentEndpointConfig(
         protocols=[
             AgentEndpointProtocol.RESPONSES,
             AgentEndpointProtocol.A2A,
@@ -115,19 +115,22 @@ def deploy() -> None:
     )
 
     client.beta.agents.patch_agent_details(
-        agent_name="bike-concierge",
+        agent_name="researcher-concierge",
         agent_endpoint=endpoint_config,
         agent_card=agent_card,
     )
 
     endpoint = get_env("AZURE_AI_PROJECT_ENDPOINT").rstrip("/")
-    agent_name = "bike-concierge"
+    agent_name = "researcher-concierge"
     a2a_base = f"{endpoint}/agents/{agent_name}/endpoint/protocols/a2a"
-    card_url = f"{a2a_base}/agentCard/v0.3"
+    # A2A v1.0 is recommended for new integrations; Foundry also serves the v0.3 card.
+    card_url = f"{a2a_base}/agentCard/v1.0"
+    card_url_v03 = f"{a2a_base}/agentCard/v0.3"
 
     print(f"\nPrompt agent '{agent_name}' created: {concierge.id}")
     print(f"A2A base path: {a2a_base}")
-    print(f"Agent card URL: {card_url}")
+    print(f"Agent card URL (v1.0): {card_url}")
+    print(f"Agent card URL (v0.3): {card_url_v03}")
 
 
 if __name__ == "__main__":

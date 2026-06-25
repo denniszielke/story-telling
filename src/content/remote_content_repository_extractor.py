@@ -96,6 +96,13 @@ class RemoteRepositoryContentExtractor:
         self.sandbox_group_name = sandbox_group_name or os.getenv("SANDBOX_GROUP_NAME", "repo-extraction")
         self.location = location or os.getenv("LOCATION", "westus3")
 
+        # Upper bound on a single Copilot CLI analysis run inside the sandbox.
+        # Without it a stuck agent only ends when the data-plane connection
+        # drops (observed as a ~17 minute hang then RemoteDisconnected).
+        self.agent_timeout_seconds = int(
+            os.getenv("REPOSITORY_EXTRACTION_AGENT_TIMEOUT", "600")
+        )
+
         self._sandbox_client = None
 
     # ------------------------------------------------------------------
@@ -323,7 +330,15 @@ class RemoteRepositoryContentExtractor:
             self._configure_credentials(sandbox)
             self._lock_down_egress(sandbox)
 
-            repo_dir = f"/root/{repo}"
+            # Keep the repo, prompt and output file all under a single working
+            # directory. The Copilot CLI restricts file tools to its working
+            # directory tree, so the prompt/output must live inside it - placing
+            # them at /root (a parent of the repo cwd) triggers "Permission
+            # denied" and forces the agent into brittle workarounds.
+            work_dir = "/root/work"
+            self._exec_check(sandbox, f"mkdir -p {work_dir}", label="mkdir-work")
+
+            repo_dir = f"{work_dir}/{repo}"
             clone_url = f"https://github.com/{owner}/{repo}.git"
             self._exec_check(
                 sandbox,
@@ -331,17 +346,27 @@ class RemoteRepositoryContentExtractor:
                 label="git-clone",
             )
 
-            prompt_path = "/root/repository-extraction.md"
-            output_path = "/root/index-entry.json"
+            prompt_path = f"{work_dir}/repository-extraction.md"
+            output_path = f"{work_dir}/index-entry.json"
             sandbox.write_file(prompt_path, prompt_text)
 
             agent_prompt = self._build_agent_prompt(repo_dir, prompt_path, output_path)
             agent_cmd = (
-                f"cd {repo_dir} && GH_TOKEN={self.github_pat} "
+                f"cd {work_dir} && GH_TOKEN={self.github_pat} "
+                f"timeout {self.agent_timeout_seconds}s "
                 f"bash -lc 'copilot --allow-all-tools -p \"{agent_prompt}\"'"
             )
-            exit_code = self._exec_stream(sandbox, agent_cmd, label="copilot-agent")
-            if exit_code != 0:
+            exit_code = self._exec_stream(
+                sandbox,
+                agent_cmd,
+                label="copilot-agent",
+                max_wait=self.agent_timeout_seconds + 120,
+            )
+            if exit_code == 124:
+                logger.warning(
+                    "Copilot agent timed out after %ss", self.agent_timeout_seconds
+                )
+            elif exit_code != 0:
                 logger.warning("Copilot agent exited with code %s", exit_code)
 
             raw = sandbox.read_file(output_path)
@@ -457,8 +482,13 @@ class RemoteRepositoryContentExtractor:
             )
         return (r.stdout or "").strip()
 
-    def _exec_stream(self, sandbox, cmd: str, *, poll_interval: float = 3.0, label: str = "") -> int:
-        """Run cmd in the background and stream its output by polling a log file."""
+    def _exec_stream(self, sandbox, cmd: str, *, poll_interval: float = 3.0, label: str = "", max_wait: Optional[float] = None) -> int:
+        """Run cmd in the background and stream its output by polling a log file.
+
+        ``max_wait`` bounds the total time spent polling so a hung run cannot
+        block indefinitely; on expiry the background command is killed and
+        exit code 124 (timeout convention) is returned.
+        """
         tag = uuid.uuid4().hex[:8]
         script_path = f"/tmp/stream_{tag}.sh"
         log_path = f"/tmp/stream_{tag}.log"
@@ -470,6 +500,7 @@ class RemoteRepositoryContentExtractor:
             f"bash -c 'bash {script_path} >{log_path} 2>&1; echo $? >{done_path}' &"
         )
 
+        deadline = time.monotonic() + max_wait if max_wait else None
         lines_shown = 0
         while True:
             time.sleep(poll_interval)
@@ -486,3 +517,9 @@ class RemoteRepositoryContentExtractor:
                 if r.stdout:
                     print(r.stdout, end="", flush=True)
                 return int(exit_str)
+
+            if deadline and time.monotonic() > deadline:
+                tag_str = f" [{label}]" if label else ""
+                logger.warning("Streamed command%s exceeded max_wait; terminating", tag_str)
+                sandbox.exec(f"pkill -f {script_path} 2>/dev/null || true")
+                return 124

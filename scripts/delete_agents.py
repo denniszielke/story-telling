@@ -12,11 +12,8 @@ from deploy_helpers import get_client
 
 # All agent names managed by this project
 ALL_AGENT_NAMES = [
-    "bike-concierge",   # prompt agent
-    "product-guide",    # hosted agent
-    "support-hotline",  # hosted agent
-    "repair-status",    # hosted agent
-    "bike-support",     # workflow agent
+    "researcher-concierge",  # prompt agent
+    "researcher",            # hosted agent
 ]
 
 

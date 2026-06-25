@@ -17,6 +17,23 @@ load_dotenv(override=True)
 # identities to call models and reach the toolbox MCP endpoint.
 _AZURE_AI_USER_ROLE_ID = "53ca6127-db72-4b80-b1b0-d745d6d5456d"
 
+# Cognitive Services OpenAI User role definition ID — required at the AI Services
+# account scope so the agent identity can call the OpenAI data plane directly
+# (chat/completions, embeddings).
+_COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID = "5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"
+
+
+def account_scope_from_project_id(project_arm_id: str) -> str:
+    """Derive the parent Cognitive Services account ARM ID from a project ARM ID.
+
+    A project ARM ID looks like
+    ``/subscriptions/.../accounts/<account>/projects/<project>``; the account
+    scope is everything up to (and including) the account segment.
+    """
+    marker = "/projects/"
+    idx = project_arm_id.find(marker)
+    return project_arm_id[:idx] if idx != -1 else project_arm_id
+
 
 def get_env(name: str, required: bool = True, default: str | None = None) -> str:
     value = os.getenv(name, default)
@@ -76,13 +93,32 @@ def assign_azure_ai_user_role(principal_id: str, scope: str) -> None:
 
     Idempotent: ignores 'already exists' errors from az CLI.
     """
-    print(f"Assigning Azure AI User role to principal {principal_id} at {scope}...")
+    _assign_role(principal_id, _AZURE_AI_USER_ROLE_ID, scope, "Azure AI User")
+
+
+def assign_cognitive_services_openai_user_role(principal_id: str, scope: str) -> None:
+    """Assign the Cognitive Services OpenAI User role at the given scope.
+
+    Grants the OpenAI data-plane actions (chat/completions, embeddings) the
+    agent needs when calling the model endpoint directly. Idempotent.
+    """
+    _assign_role(
+        principal_id,
+        _COGNITIVE_SERVICES_OPENAI_USER_ROLE_ID,
+        scope,
+        "Cognitive Services OpenAI User",
+    )
+
+
+def _assign_role(principal_id: str, role_id: str, scope: str, role_name: str) -> None:
+    """Assign a role to a principal at a scope. Idempotent."""
+    print(f"Assigning {role_name} role to principal {principal_id} at {scope}...")
     result = subprocess.run(
         [
             "az", "role", "assignment", "create",
             "--assignee-object-id", principal_id,
             "--assignee-principal-type", "ServicePrincipal",
-            "--role", _AZURE_AI_USER_ROLE_ID,
+            "--role", role_id,
             "--scope", scope,
         ],
         capture_output=True,
