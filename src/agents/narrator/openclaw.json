@@ -1,0 +1,51 @@
+// Shopping Claw — OpenClaw gateway config template (JSON5).
+//
+// This file is baked into the container as a TEMPLATE used by the standalone
+// container CMD. At boot, start-gateway.sh renders the placeholder tokens
+// (written as dollar-brace NAME) from environment variables into the real
+// config at $OPENCLAW_CONFIG_HOME/openclaw.json.
+//
+// NOTE: the Python orchestrator (shopping_claw.py) writes a fully-rendered
+// config directly into the sandbox instead of using this template, so it can
+// wire up user-assigned managed identity auth for the model provider.
+//
+// Secrets (provider API key, gateway token) are injected as env vars at
+// runtime — they are never stored in the image.
+{
+  gateway: {
+    // Bind to 0.0.0.0 so the Azure Container Apps Sandbox ingress can forward
+    // public traffic to the gateway HTTP server. The canvas + A2UI hosts are
+    // served from this same port:
+    //   /__openclaw__/canvas/   (agent-editable HTML/CSS/JS)
+    //   /__openclaw__/a2ui/     (A2UI host)
+    bind: {
+      host: "${OPENCLAW_GATEWAY_HOST}",
+      port: ${OPENCLAW_GATEWAY_PORT},
+    },
+    auth: {
+      // Public ingress: keep a shared-secret token. The orchestrator generates
+      // one and prints the canvas URL with the token attached. Set
+      // OPENCLAW_GATEWAY_AUTH_MODE=none only for fully private ingress.
+      mode: "${OPENCLAW_GATEWAY_AUTH_MODE}",
+      token: "${OPENCLAW_GATEWAY_TOKEN}",
+    },
+  },
+
+  // Default model provider. The orchestrator passes the key through as an env
+  // var; OpenClaw reads it from the environment at runtime.
+  models: {
+    default: "${OPENCLAW_MODEL}",
+    providers: {
+      "${OPENCLAW_PROVIDER}": {
+        apiKeyEnv: "${OPENCLAW_PROVIDER_API_KEY_ENV}",
+      },
+    },
+  },
+
+  // The shopping-claw persona + canvas behaviour live in this baked skill.
+  agents: {
+    defaults: {
+      skills: ["/opt/shopping-claw/skills/shopping"],
+    },
+  },
+}

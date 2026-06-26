@@ -18,6 +18,8 @@ from azure.search.documents.models import VectorizedQuery
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from openai import AzureOpenAI
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 load_dotenv(override=True)
 
@@ -132,6 +134,12 @@ mcp = FastMCP(
 
 # Backward compatibility for previous imports
 server = mcp
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_check(_: Request) -> JSONResponse:
+    """Readiness/liveness probe endpoint — returns 200 OK when the server is up."""
+    return JSONResponse({"status": "ok"})
 
 
 @mcp.tool(

@@ -13,6 +13,8 @@ agent deployment scripts.
 - [1. Infrastructure deployment](#1-infrastructure-deployment)
 - [2. Search index pipeline](#2-search-index-pipeline)
 - [3. Agent deployment scripts](#3-agent-deployment-scripts)
+- [4. Shopping Claw (sandboxed OpenClaw agent)](#4-shopping-claw-sandboxed-openclaw-agent)
+- [5. Research MCP server (Azure Container Apps)](#5-research-mcp-server-azure-container-apps)
 - [Environment variables reference](#environment-variables-reference)
 - [Teardown](#teardown)
 
@@ -58,6 +60,7 @@ pip install -r requirements.txt
 | `scripts/delete_agents.py` | Removes deployed agents |
 | `data/*.json` | Sample documents ingested by the index pipeline |
 | `src/agents/` | Hosted agent source (Dockerfiles, code) |
+| `src/agents/narrator/` | Shopping Claw — a sandboxed OpenClaw agent (canvas + A2UI) |
 
 ---
 
@@ -218,6 +221,118 @@ python deploy_hosted_agents.py  # rebuild and redeploy hosted agents only
 
 ---
 
+## 4. Shopping Claw (sandboxed OpenClaw agent)
+
+[`src/agents/narrator/`](src/agents/narrator/) is **Shopping Claw**, a
+conversational shopping concierge built on [OpenClaw](https://docs.openclaw.ai)
+that runs **only inside an Azure Container Apps Sandbox** and exposes its
+**canvas + A2UI** surfaces through the OpenClaw gateway. OpenClaw is never
+installed or executed on your machine — a custom bring-your-own-container image
+bakes it into a sandbox disk image. The agent authenticates to Azure through a
+**user-assigned managed identity** (ACR pull, sandbox group, and model access).
+
+See [`src/agents/narrator/README.md`](src/agents/narrator/README.md) for the
+full design and configuration reference.
+
+### Step 1 — remote-build the container in ACR
+
+Runs the Docker build in the cloud via ACR Tasks (no local Docker required):
+
+```sh
+python scripts/build_narrator_image.py
+# optional: pin a tag or openclaw version
+python scripts/build_narrator_image.py --tag shopping-claw:v2 --openclaw-version latest
+```
+
+### Step 2 — boot the sandbox and expose the canvas + A2UI
+
+```sh
+python src/agents/narrator/shopping_claw.py
+```
+
+The orchestrator resolves (or creates) the managed identity, converts the ACR
+image into a private disk image, boots the sandbox, starts the gateway inside
+it, publishes the gateway port, and prints the public canvas and A2UI URLs:
+
+```text
+Canvas : https://<host>/__openclaw__/canvas/?token=...
+A2UI   : https://<host>/__openclaw__/a2ui/?token=...
+```
+
+Press Enter when prompted to delete the sandbox (and its public port).
+
+### Required configuration
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AZURE_CONTAINER_REGISTRY_ENDPOINT` | infra output | **Required.** ACR login server |
+| `NARRATOR_IMAGE_TAG` | `shopping-claw:latest` | image:tag to build / boot |
+| `RESOURCE_GROUP_NAME` | `aca-sandboxes-rg` | sandbox resource group |
+| `SANDBOX_GROUP_NAME` | `shopping-claw` | sandbox group name |
+| `LOCATION` | `westus3` | Azure region |
+| `AZURE_MANAGED_IDENTITY_RESOURCE_ID` | — | reuse an existing identity (else one is created) |
+| `AZURE_OPENAI_ENDPOINT` | — | when set, the model is reached via the managed identity (no key) |
+
+> Requires permission to create role assignments (Owner / User Access
+> Administrator) at the resource-group scope, since the orchestrator grants the
+> managed identity AcrPull and the SandboxGroup Data Owner role.
+
+---
+
+## 5. Research MCP server (Azure Container Apps)
+
+[`src/mcp_server/research_mcp_server/`](src/mcp_server/research_mcp_server/) is a
+remote **MCP server** that exposes the architecture-research tools (comparable
+case-study search and methodology recommendations) over streamable HTTP. It is
+packaged as a container ([`Dockerfile`](src/mcp_server/research_mcp_server/Dockerfile))
+and deployed as an Azure Container App.
+
+[`scripts/deploy_research_mcp_server.py`](scripts/deploy_research_mcp_server.py)
+remote-builds the image in ACR (ACR Tasks — no local Docker required) and
+creates or updates the Container App, then prints the resulting `…/mcp` URL. All
+settings are read from `.env`.
+
+### Deploy
+
+```sh
+# Build the image in ACR, then deploy (first deploy or after code changes)
+python scripts/deploy_research_mcp_server.py --build
+
+# Deploy only — image already in ACR, uses :latest (or the TAG env var)
+python scripts/deploy_research_mcp_server.py
+```
+
+The script creates the app with a **system-assigned managed identity** and grants
+it the **Search Index Data Reader** and **Cognitive Services OpenAI User** roles
+so the server's `DefaultAzureCredential` can reach Azure AI Search and Azure
+OpenAI. The resulting MCP endpoint is
+`https://research-mcp-server.<env-default-domain>/mcp` (with a `/health` probe).
+
+### Required configuration
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AZURE_CONTAINER_REGISTRY_ENDPOINT` | infra output | **Required.** ACR login server |
+| `AZURE_RESOURCE_GROUP` | infra output | **Required.** Target resource group |
+| `AZURE_CONTAINER_APPS_ENVIRONMENT` | — | **Required.** Existing Container Apps environment |
+| `AZURE_AI_SEARCH_ENDPOINT` | infra output | **Required.** Azure AI Search endpoint |
+| `AZURE_AI_SEARCH_INDEX_NAME` | infra output | **Required.** Search index name |
+| `AZURE_OPENAI_ENDPOINT` | infra output | **Required.** Azure OpenAI endpoint |
+| `AZURE_AI_SEARCH_SERVICE_NAME` | infra output | Search service (for the role assignment) |
+| `RESEARCH_MCP_APP_NAME` | `research-mcp-server` | Container App name |
+| `RESEARCH_MCP_PORT` | `8000` | Container target port |
+| `RESEARCH_MCP_EXTERNAL` | `true` | Expose external ingress (`true`/`false`) |
+| `TAG` | `latest` | Image tag to deploy |
+
+> Requires permission to create role assignments at the search service and AI
+> Services account scopes. The Container Apps environment must already exist
+> (`AZURE_CONTAINER_APPS_ENVIRONMENT`).
+
+See [`src/mcp_server/research_mcp_server/README.md`](src/mcp_server/research_mcp_server/README.md)
+for the available tools and local-run instructions.
+
+---
+
 ## Environment variables reference
 
 | Variable | Source | Used by |
@@ -237,17 +352,36 @@ python deploy_hosted_agents.py  # rebuild and redeploy hosted agents only
 | `AZURE_OPENAI_EMBEDDING_API_VERSION` | infra output | Index pipeline |
 | `REPOSITORY_EXTRACTOR_MODE` | optional | Index pipeline (`local` / `remote`) |
 | `AZURE_OPENAI_API_KEY` | optional | Index pipeline (key-based auth) |
+| `NARRATOR_IMAGE_TAG` | optional | Shopping Claw image build / boot |
+| `AZURE_MANAGED_IDENTITY_RESOURCE_ID` | optional | Shopping Claw agent identity |
+| `MANAGED_IDENTITY_NAME` | optional | Shopping Claw identity to create/reuse |
+| `SANDBOX_GROUP_NAME` | optional | Shopping Claw sandbox group |
+| `AZURE_OPENAI_ACCOUNT_ID` | optional | Shopping Claw — grants identity OpenAI User role |
+| `AZURE_CONTAINER_APPS_ENVIRONMENT` | required for MCP server | Research MCP server Container App |
+| `RESEARCH_MCP_APP_NAME` | optional | Research MCP server Container App name |
+| `RESEARCH_MCP_PORT` | optional | Research MCP server container port |
+| `RESEARCH_MCP_EXTERNAL` | optional | Research MCP server external ingress |
 
 ---
 
 ## Teardown
 
-Remove deployed agents:
+Delete **all** deployed application resources (agents, the Research MCP Container
+App, and the Shopping Claw sandbox) in one step:
 
 ```sh
-cd scripts
-python delete_agents.py                 # delete all known agents
-python delete_agents.py support-hotline # delete specific agent(s)
+python scripts/delete_all.py
+# also delete the sandbox resource group:
+python scripts/delete_all.py --delete-resource-group
+```
+
+Or remove individual pieces:
+
+```sh
+python scripts/delete_agents.py                 # all known agents
+python scripts/delete_agents.py researcher      # specific agent(s)
+python scripts/delete_research_mcp_server.py     # Research MCP Container App
+python scripts/delete_sandbox.py                 # Shopping Claw sandbox + group
 ```
 
 Remove all Azure infrastructure:

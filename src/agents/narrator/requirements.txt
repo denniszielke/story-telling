@@ -1,0 +1,6 @@
+# Azure Container Apps Sandbox SDK
+azure-containerapps-sandbox==0.1.0b1
+azure-identity>=1.25.0
+azure-mgmt-resource>=23.0.0
+azure-mgmt-authorization>=4.0.0
+python-dotenv>=1.2.0

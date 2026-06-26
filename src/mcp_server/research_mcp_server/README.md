@@ -43,6 +43,64 @@ You can override host/port/path with environment variables:
 - `RESEARCH_MCP_PORT`
 - `RESEARCH_MCP_PATH`
 
+A `GET /health` endpoint is exposed for readiness/liveness probes and returns
+`{"status": "ok"}` when the server is up.
+
+## Run in a Container / Azure Container Apps
+
+A `Dockerfile` is included. The build context is the **repository root** (so the
+`./src` package tree is copied into the image):
+
+```bash
+# Build (from the repo root)
+docker build -f src/mcp_server/research_mcp_server/Dockerfile -t research-mcp-server .
+
+# Run locally
+docker run --rm -p 8000:8000 \
+  -e AZURE_AI_SEARCH_ENDPOINT="https://<search>.search.windows.net" \
+  -e AZURE_AI_SEARCH_INDEX_NAME="<index>" \
+  -e AZURE_OPENAI_ENDPOINT="https://<aoai>.openai.azure.com" \
+  research-mcp-server
+```
+
+Inside the container the server binds to `0.0.0.0:8000` (set via `ENV` in the
+`Dockerfile`) so it can receive ingress traffic.
+
+### Deploy to Azure Container Apps
+
+Use the deploy script — it remote-builds the image in ACR (ACR Tasks, no local
+Docker needed) and deploys/updates the Container App, then prints the `…/mcp`
+URL. All settings are read from `./.env` (written by `azd up`).
+
+```bash
+# Build the image in ACR, then deploy (first deploy or after code changes)
+python scripts/deploy_research_mcp_server.py --build
+
+# Deploy only — image already in ACR, uses :latest (or the TAG env var)
+python scripts/deploy_research_mcp_server.py
+```
+
+Environment variables (populated automatically from `.env` after `azd up`):
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `AZURE_CONTAINER_REGISTRY_ENDPOINT` | ACR login server (required) | — |
+| `AZURE_RESOURCE_GROUP` | Target resource group (required) | — |
+| `AZURE_CONTAINER_APPS_ENVIRONMENT` | Container Apps environment (required) | — |
+| `AZURE_AI_SEARCH_ENDPOINT` | Azure AI Search endpoint (required) | — |
+| `AZURE_AI_SEARCH_INDEX_NAME` | Search index name (required) | — |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint (required) | — |
+| `RESEARCH_MCP_APP_NAME` | Container App name | `research-mcp-server` |
+| `RESEARCH_MCP_PORT` | Container target port | `8000` |
+| `RESEARCH_MCP_EXTERNAL` | Expose external ingress (`true`/`false`) | `true` |
+| `TAG` | Image tag to deploy | `latest` |
+
+The script creates the app with a **system-assigned managed identity** and grants
+it the **Search Index Data Reader** and **Cognitive Services OpenAI User** roles
+so the server's `DefaultAzureCredential` can reach Azure AI Search and Azure
+OpenAI. The resulting MCP endpoint is
+`https://research-mcp-server.<env-default-domain>/mcp`.
+
 ## Tools Available
 
 ### 1. `search_comparable_case_studies`
