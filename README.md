@@ -15,6 +15,7 @@ agent deployment scripts.
 - [3. Agent deployment scripts](#3-agent-deployment-scripts)
 - [4. Shopping Claw (sandboxed OpenClaw agent)](#4-shopping-claw-sandboxed-openclaw-agent)
 - [5. Research MCP server (Azure Container Apps)](#5-research-mcp-server-azure-container-apps)
+- [6. Ingestion agent (sandboxed URL ingestion)](#6-ingestion-agent-sandboxed-url-ingestion)
 - [Environment variables reference](#environment-variables-reference)
 - [Teardown](#teardown)
 
@@ -61,6 +62,7 @@ pip install -r requirements.txt
 | `data/*.json` | Sample documents ingested by the index pipeline |
 | `src/agents/` | Hosted agent source (Dockerfiles, code) |
 | `src/agents/narrator/` | Shopping Claw — a sandboxed OpenClaw agent (canvas + A2UI) |
+| `src/agents/ingestion/` | Ingestion agent — skill-driven URL → Azure AI Search ingestion (sandboxed) |
 
 ---
 
@@ -333,6 +335,85 @@ for the available tools and local-run instructions.
 
 ---
 
+## 6. Ingestion agent (sandboxed URL ingestion)
+
+[`src/agents/ingestion/`](src/agents/ingestion/) is a **skill-driven ingestion
+agent** that turns source URLs into Azure AI Search documents. It reuses the
+index-pipeline extractors and schema, but runs **only inside an Azure Container
+Apps Sandbox** from a bring-your-own-container image. For each URL it:
+
+1. runs the **asset-identification** skill to classify the URL's objective
+   (`use case` / `code` / `method`),
+2. invokes the matching **processing skill** (each objective has its own
+   `SKILL.md` under [`src/agents/ingestion/skills/`](src/agents/ingestion/skills/)),
+   and
+3. embeds and upserts the document into Azure AI Search.
+
+Inside the sandbox the agent authenticates with a **user-assigned managed
+identity** (injected as `AZURE_CLIENT_ID`) — no secrets are baked into the
+image. The same identity is reused by both scripts.
+
+### Step 1 — build the image and provision the identity
+
+[`scripts/build_ingestion_image.py`](scripts/build_ingestion_image.py)
+remote-builds the image in ACR (ACR Tasks — no local Docker required), then
+creates or reuses the managed identity and grants it everything the agent needs
+at runtime: **Cognitive Services OpenAI User**, **Azure AI User**, **Search
+Index Data Contributor**, **Search Service Contributor**, and **AcrPull**.
+
+```sh
+python scripts/build_ingestion_image.py
+# refresh the identity / roles without rebuilding the image:
+python scripts/build_ingestion_image.py --no-build
+```
+
+### Step 2 — launch a sandbox per URL
+
+[`scripts/run_ingestion_sandbox.py`](scripts/run_ingestion_sandbox.py) converts
+the image into a private disk image (pulled via the managed identity) and boots
+**one sandbox per URL**. A single URL runs in one sandbox; multiple URLs each
+get their own sandbox, booted sequentially from the same disk image.
+
+```sh
+# one URL → one sandbox
+python scripts/run_ingestion_sandbox.py --url https://example.com/case-study
+
+# many URLs → one sandbox per URL
+python scripts/run_ingestion_sandbox.py --urls https://a.com,https://b.com
+python scripts/run_ingestion_sandbox.py --urls-file data/query-samples.json
+
+# skip identification and force an objective
+python scripts/run_ingestion_sandbox.py --url https://x.com --objective "use case"
+```
+
+Each sandbox streams the agent's output back to your terminal and is deleted
+once its URL is processed.
+
+### Required configuration
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AZURE_CONTAINER_REGISTRY_ENDPOINT` | infra output | **Required.** ACR login server |
+| `AZURE_AI_PROJECT_ID` | infra output | **Required (build).** Foundry project ARM id (model + project roles, infra RG) |
+| `AZURE_OPENAI_ENDPOINT` | infra output | **Required.** Foundry / Azure OpenAI endpoint |
+| `AZURE_AI_SEARCH_ENDPOINT` | infra output | **Required.** Azure AI Search endpoint |
+| `AZURE_AI_SEARCH_INDEX_NAME` | infra output | **Required.** Target index name |
+| `AZURE_AI_SEARCH_SERVICE_NAME` | infra output | Search service (else derived from the endpoint) |
+| `AZURE_RESOURCE_GROUP` | infra output | Infra RG for the Search role grant (else derived from `AZURE_AI_PROJECT_ID`) |
+| `INGESTION_IMAGE_NAME` | `ingestion-agent` | Image repository |
+| `INGESTION_IMAGE_TAG` | `latest` | Image tag to boot |
+| `INGESTION_IDENTITY_NAME` | `ingestion-agent-identity` | UAMI to create / reuse |
+| `RESOURCE_GROUP_NAME` | `aca-sandboxes-rg` | Sandbox RG (also hosts the managed identity) |
+| `SANDBOX_GROUP_NAME` | `ingestion-agent` | Sandbox group name |
+| `LOCATION` | `westus3` | Azure region |
+
+> Requires permission to create role assignments (Owner / User Access
+> Administrator) at the AI Services account, AI Search service, ACR, and
+> resource-group scopes. The launcher also grants the signed-in user the
+> **Container Apps SandboxGroup Data Owner** role.
+
+---
+
 ## Environment variables reference
 
 | Variable | Source | Used by |
@@ -361,6 +442,11 @@ for the available tools and local-run instructions.
 | `RESEARCH_MCP_APP_NAME` | optional | Research MCP server Container App name |
 | `RESEARCH_MCP_PORT` | optional | Research MCP server container port |
 | `RESEARCH_MCP_EXTERNAL` | optional | Research MCP server external ingress |
+| `INGESTION_IMAGE_NAME` | optional | Ingestion agent image repository |
+| `INGESTION_IMAGE_TAG` | optional | Ingestion agent image tag to boot |
+| `INGESTION_IDENTITY_NAME` | optional | Ingestion agent UAMI to create/reuse |
+| `AZURE_RESOURCE_GROUP` | infra output | Ingestion image build (identity RG), Research MCP server |
+| `AZURE_AI_SEARCH_SERVICE_NAME` | infra output | Ingestion role grants, Research MCP server |
 
 ---
 
