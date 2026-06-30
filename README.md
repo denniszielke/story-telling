@@ -4,6 +4,30 @@ End-to-end deployment documentation for the project: Azure infrastructure
 (Bicep + `azd`), the Azure AI Search index pipeline, and the Azure AI Foundry
 agent deployment scripts.
 
+## Narrative
+
+This repo tells one story: how **skills**, **tools**, and **runtimes** combine to
+build agents that go from research to action.
+
+It starts with knowledge. The **ingestion agent** reads source URLs, uses a
+**skill** to classify each one (use case, code, or method), runs the matching
+processing skill, and writes the result into Azure AI Search — populating a
+grounded knowledge base.
+
+That knowledge becomes a **tool**. The **Research MCP server** exposes the index
+over MCP (comparable case-study search and methodology recommendations), and the
+shared **toolbox** adds Bing grounding — both reachable by any agent.
+
+Then agents put it to work across different **runtimes**. A lightweight
+**prompt agent** (the concierge) classifies intent and routes to specialists.
+**Hosted agents** run as containers in Azure AI Foundry, calling models and the
+toolbox. And **Shopping Claw** runs entirely inside an Azure Container Apps
+Sandbox — an OpenClaw agent that never touches your machine, exposing its canvas
+and A2UI surfaces through a gateway.
+
+The throughline: the same skills and tools are reused everywhere, while the
+runtime — prompt, hosted container, or sandbox — is chosen to fit the job.
+
 ---
 
 ## Table of contents
