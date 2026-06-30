@@ -12,7 +12,7 @@ build agents that go from research to action.
 It starts with knowledge. The **ingestion agent** reads source URLs, uses a
 **skill** to classify each one (use case, code, or method), runs the matching
 processing skill, and writes the result into Azure AI Search — populating a
-grounded knowledge base.
+grounded knowledge base and leveraging **memory*** that is both user and agent specific to improve the experience over time.
 
 That knowledge becomes a **tool**. The **Research MCP server** exposes the index
 over MCP (comparable case-study search and methodology recommendations), and the
@@ -21,9 +21,11 @@ shared **toolbox** adds Bing grounding — both reachable by any agent.
 Then agents put it to work across different **runtimes**. A lightweight
 **prompt agent** (the concierge) classifies intent and routes to specialists.
 **Hosted agents** run as containers in Azure AI Foundry, calling models and the
-toolbox. And **Shopping Claw** runs entirely inside an Azure Container Apps
-Sandbox — an OpenClaw agent that never touches your machine, exposing its canvas
-and A2UI surfaces through a gateway.
+toolbox. Chief among them is the **researcher** — a LangChain/LangGraph *deep
+agent* that researches a scenario, prepares the narrative, breaks it into
+work items, researches each one against the grounded index, and produces visuals,
+code, and stories. It plans its own subtasks, keeps a human in the loop on every
+search, and persists insights to memory between runs.
 
 The throughline: the same skills and tools are reused everywhere, while the
 runtime — prompt, hosted container, or sandbox — is chosen to fit the job.
@@ -40,6 +42,7 @@ runtime — prompt, hosted container, or sandbox — is chosen to fit the job.
 - [4. Shopping Claw (sandboxed OpenClaw agent)](#4-shopping-claw-sandboxed-openclaw-agent)
 - [5. Research MCP server (Azure Container Apps)](#5-research-mcp-server-azure-container-apps)
 - [6. Ingestion agent (sandboxed URL ingestion)](#6-ingestion-agent-sandboxed-url-ingestion)
+- [7. Researcher agent (LangChain deep agent)](#7-researcher-agent-langchain-deep-agent)
 - [Environment variables reference](#environment-variables-reference)
 - [Teardown](#teardown)
 
@@ -85,6 +88,7 @@ pip install -r requirements.txt
 | `scripts/delete_agents.py` | Removes deployed agents |
 | `data/*.json` | Sample documents ingested by the index pipeline |
 | `src/agents/` | Hosted agent source (Dockerfiles, code) |
+| `src/agents/researcher/` | Researcher — a LangChain/LangGraph deep agent (deep research → narrative, visuals, code, stories) |
 | `src/agents/narrator/` | Shopping Claw — a sandboxed OpenClaw agent (canvas + A2UI) |
 | `src/agents/ingestion/` | Ingestion agent — skill-driven URL → Azure AI Search ingestion (sandboxed) |
 
@@ -213,7 +217,7 @@ python scripts/deploy_agents.py
 | --- | --- | --- |
 | Prompt agents | [`deploy_prompt_agents.py`](scripts/deploy_prompt_agents.py) | `bike-concierge` — a prompt agent that classifies intent and routes to specialists |
 | Toolbox | [`deploy_toolbox.py`](scripts/deploy_toolbox.py) | `bikesupport-tools` — a shared Foundry toolbox exposing Bing Custom Web Search via MCP |
-| Hosted agents | [`deploy_hosted_agents.py`](scripts/deploy_hosted_agents.py) | Builds container images on ACR and deploys hosted agents discovered under `src/agents/` (e.g. `support-hotline`, `repair-status`) |
+| Hosted agents | [`deploy_hosted_agents.py`](scripts/deploy_hosted_agents.py) | Builds container images on ACR and deploys hosted agents discovered under `src/agents/` (e.g. the `researcher` deep agent) |
 | Workflow agents | [`deploy_workflow_agents.py`](scripts/deploy_workflow_agents.py) | Workflow agents defined as YAML under `src/workflows/` |
 
 You can also run any stage independently, for example:
@@ -438,6 +442,89 @@ once its URL is processed.
 
 ---
 
+## 7. Researcher agent (LangChain deep agent)
+
+[`src/agents/researcher/`](src/agents/researcher/) is the **researcher** — a
+[LangChain](https://python.langchain.com)/[LangGraph](https://langchain-ai.github.io/langgraph/)
+**deep agent** (built with [`deepagents`](https://github.com/langchain-ai/deepagents))
+that turns a raw scenario into an evidence-grounded proposal. It plans its own
+work, breaks the scenario into research subtasks, grounds each one against the
+curated Azure AI Search index, and assembles the result into a narrative with
+visuals, code, and stories. The agent is a `langgraph` `CompiledStateGraph`;
+invocation, streaming, and human-in-the-loop resumption are handled by the A2A
+server in [`a2a_server.py`](src/agents/researcher/a2a_server.py).
+
+### How it works
+
+The agent's behaviour is defined by **progressive disclosure** — it loads
+always-on operating memory plus three skills on demand:
+
+- **Operating memory** — [`memories/AGENTS.md`](src/agents/researcher/memories/AGENTS.md)
+  pins the output contract (Scenario Description → Architecture Concept with ADRs
+  → Visualization) and the deep-research loop.
+- **`architecture-research` skill** — searches the curated index for grounded
+  evidence (`case-study` use cases and `method` methodologies) via
+  `search_architecture_content`.
+- **`visualization` skill** — generates whiteboard-style architecture diagrams
+  with `generate_visualization`.
+- **`memory-management` skill** — persists and recalls durable insights across
+  runs with `save_insight` / `recall_insights`.
+
+For every scenario it: recalls prior insights → researches use cases →
+researches methods → synthesises the proposal (citing `source` URLs) →
+generates the visualization → persists the most reusable insights.
+
+### Human-in-the-loop
+
+Every `search_architecture_content` call is **interrupted for human review**
+before it runs. Over A2A the task transitions to `INPUT_REQUIRED`, and the next
+reviewer message (`approve` / `reject <reason>` / edited JSON args) resumes the
+graph from its checkpoint.
+
+### Run locally
+
+```sh
+cd src/agents/researcher
+pip install -r requirements.txt
+
+# one-shot CLI (auto-approves searches)
+python agent.py "Architecture proposal for a field-service diagnostics multi-agent system"
+
+# A2A JSON-RPC server (HITL on every search)
+python -m a2a_server
+# or: uvicorn a2a_server:app --host 127.0.0.1 --port 9999
+```
+
+### Deploy as a hosted agent
+
+The researcher ships with a [`Dockerfile`](src/agents/researcher/Dockerfile) and
+an agent card, so it is discovered and deployed automatically by the hosted-agent
+stage (see [section 3](#3-agent-deployment-scripts)):
+
+```sh
+python scripts/deploy_hosted_agents.py   # builds the image on ACR and deploys
+# or run the full orchestrator:
+python scripts/deploy_agents.py
+```
+
+### Required configuration
+
+| Variable | Source | Notes |
+| --- | --- | --- |
+| `AZURE_OPENAI_ENDPOINT` | infra output | **Required.** Azure OpenAI / Foundry endpoint |
+| `AZURE_OPENAI_CHAT_DEPLOYMENT_NAME` | infra output | Chat model deployment used by the deep agent |
+| `AZURE_OPENAI_API_VERSION` | optional | Azure OpenAI API version |
+| `AZURE_AI_SEARCH_ENDPOINT` | infra output | **Required.** Curated research index endpoint |
+| `AZURE_AI_SEARCH_INDEX_NAME` | infra output | **Required.** Research index name |
+| `AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME` | infra output | Embeddings for search + memory recall |
+| `AZURE_AI_SERVICES_ENDPOINT` | infra output | MAI-Image endpoint for visualization (derived from `AZURE_OPENAI_ENDPOINT` if unset) |
+
+> Authentication uses `DefaultAzureCredential` (your `az login` session locally,
+> or the agent's managed identity when hosted). Set `AZURE_OPENAI_API_KEY` to use
+> key-based auth instead.
+
+---
+
 ## Environment variables reference
 
 | Variable | Source | Used by |
@@ -447,6 +534,8 @@ once its URL is processed.
 | `AZURE_AI_MODEL_DEPLOYMENT_NAME` | infra output | Prompt/hosted agents |
 | `AZURE_OPENAI_ENDPOINT` | infra output | Index pipeline, hosted agents |
 | `OPENAI_API_VERSION` | infra output | Hosted agents |
+| `AZURE_OPENAI_CHAT_DEPLOYMENT_NAME` | infra output | Researcher deep agent chat model |
+| `AZURE_AI_SERVICES_ENDPOINT` | infra output | Researcher visualization (MAI-Image) |
 | `AZURE_CONTAINER_REGISTRY_ENDPOINT` | infra output | Hosted agent image builds |
 | `BING_CUSTOM_GROUNDING_CONNECTION_NAME` | infra output | Toolbox |
 | `BING_CUSTOM_GROUNDING_CONFIG_INSTANCE_NAME` | infra output | Toolbox |
